@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+venv/
+env/
+.env
+mlruns/
+mlartifacts/
+saved_artifacts/
+*.pkl
+*.joblib
