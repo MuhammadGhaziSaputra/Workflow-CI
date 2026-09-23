@@ -55,12 +55,14 @@ jobs:
           MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
         run: |
-          mlflow run ./MLProject \
+          cp -r breast_cancer_preprocessing MLProject/breast_cancer_preprocessing
+          cd MLProject
+          mlflow run . \
             -P n_estimators=${{ github.event.inputs.n_estimators || '200' }} \
             -P max_depth=${{ github.event.inputs.max_depth || '10' }} \
             -P min_samples_split=5 \
             -P min_samples_leaf=2 \
-            -P data_dir=../breast_cancer_preprocessing \
+            -P data_dir=breast_cancer_preprocessing \
             --env-manager=local
 
       - name: Get latest MLflow run_id
@@ -79,6 +81,10 @@ jobs:
               echo "Latest run directory: $LATEST_RUN"
               cat "$LATEST_RUN/meta.yaml" 2>/dev/null || echo "No meta.yaml found"
             fi
+          elif [ -d "MLProject/mlruns" ]; then
+            echo "MLflow runs found in MLProject/"
+            find MLProject/mlruns/ -name "meta.yaml" -type f 2>/dev/null | head -20
           else
-            echo "No local mlruns directory (using remote tracking)"
+            echo "No local mlruns directory (using remote tracking via DagsHub)"
+            echo "Check results at: ${{ secrets.MLFLOW_TRACKING_URI }}"
           fi
