@@ -3,7 +3,8 @@ modelling.py (untuk MLProject)
 Training model menggunakan MLflow Project.
 Script ini dijalankan oleh MLflow run command.
 
-Author: gaji
+Author: Muhammad Ghazi Saputra (gaji)
+Version: 1.1.0 - Updated for CI/CD retraining pipeline
 """
 
 import pandas as pd
