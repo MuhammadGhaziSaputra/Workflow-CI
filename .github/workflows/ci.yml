@@ -3,9 +3,6 @@ name: ML Training CI Pipeline
 on:
   push:
     branches: [ main ]
-    paths:
-      - 'MLProject/**'
-      - 'breast_cancer_preprocessing/**'
   workflow_dispatch:
     inputs:
       n_estimators:
@@ -25,10 +22,10 @@ jobs:
       - name: Run actions/checkout@v3
         uses: actions/checkout@v3
 
-      - name: Set up Python 3.12
+      - name: Set up Python 3.12.7
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.12.7'
 
       - name: Check Env
         run: |
@@ -77,23 +74,44 @@ jobs:
       - name: Get latest MLflow run_id
         run: |
           echo "=== MLflow Runs ==="
+          RUN_DIR=""
           if [ -d "mlruns" ]; then
-            echo "MLflow runs directory found"
-            ls -la mlruns/
+            RUN_DIR="mlruns"
+          elif [ -d "MLProject/mlruns" ]; then
+            RUN_DIR="MLProject/mlruns"
+          fi
+
+          if [ -n "$RUN_DIR" ]; then
+            echo "MLflow runs directory found at: $RUN_DIR"
+            ls -la "$RUN_DIR"
             echo ""
-            echo "Experiment directories:"
-            find mlruns/ -name "meta.yaml" -type f 2>/dev/null | head -20
-            echo ""
-            echo "Latest run info:"
-            LATEST_RUN=$(find mlruns/ -maxdepth 3 -mindepth 3 -type d | sort | tail -1)
+            LATEST_RUN=$(find "$RUN_DIR" -maxdepth 3 -mindepth 3 -type d 2>/dev/null | sort | tail -1)
             if [ -n "$LATEST_RUN" ]; then
               echo "Latest run directory: $LATEST_RUN"
-              cat "$LATEST_RUN/meta.yaml" 2>/dev/null || echo "No meta.yaml found"
+              RUN_ID=$(basename "$LATEST_RUN")
+              echo "Latest MLflow Run ID: $RUN_ID"
+              if [ -f "$LATEST_RUN/meta.yaml" ]; then
+                echo "--- meta.yaml ---"
+                cat "$LATEST_RUN/meta.yaml"
+              fi
             fi
-          elif [ -d "MLProject/mlruns" ]; then
-            echo "MLflow runs found in MLProject/"
-            find MLProject/mlruns/ -name "meta.yaml" -type f 2>/dev/null | head -20
           else
             echo "No local mlruns directory (using remote tracking via DagsHub)"
             echo "Check results at: ${{ secrets.MLFLOW_TRACKING_URI }}"
           fi
+
+          # Output latest run ID using Python MLflow API
+          python -c "
+          import os, mlflow
+          for p in [os.environ.get('MLFLOW_TRACKING_URI'), 'MLProject/mlruns', 'mlruns']:
+              if p and (os.path.isdir(p) or p.startswith('http')):
+                  try:
+                      mlflow.set_tracking_uri(p if p.startswith('http') else 'file://' + os.path.abspath(p))
+                      runs = mlflow.search_runs(search_all_experiments=True, order_by=['start_time DESC'], max_results=1)
+                      if not runs.empty:
+                          print('=== MLflow Latest Run ID via API ===')
+                          print(runs.iloc[0]['run_id'])
+                          break
+                  except Exception:
+                      pass
+          " || true
