@@ -54,16 +54,29 @@ jobs:
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
         run: |
           echo "=== Starting MLflow Project Training ==="
-          echo "Tracking URI: ${MLFLOW_TRACKING_URI:-local}"
+          if [ -z "$MLFLOW_TRACKING_URI" ]; then
+            echo "Tracking URI: local"
+            unset MLFLOW_TRACKING_URI
+            unset MLFLOW_TRACKING_USERNAME
+            unset MLFLOW_TRACKING_PASSWORD
+          else
+            echo "Tracking URI: $MLFLOW_TRACKING_URI"
+          fi
 
           # Copy preprocessing data into MLProject directory
           cp -r breast_cancer_preprocessing MLProject/breast_cancer_preprocessing
 
+          # Determine parameters with fallback
+          N_EST="${{ inputs.n_estimators }}"
+          DEPTH="${{ inputs.max_depth }}"
+          N_EST="${N_EST:-200}"
+          DEPTH="${DEPTH:-10}"
+
           # Run MLflow project for model retraining
           cd MLProject
           mlflow run . \
-            -P n_estimators=${{ github.event.inputs.n_estimators || '200' }} \
-            -P max_depth=${{ github.event.inputs.max_depth || '10' }} \
+            -P n_estimators="$N_EST" \
+            -P max_depth="$DEPTH" \
             -P min_samples_split=5 \
             -P min_samples_leaf=2 \
             -P data_dir=breast_cancer_preprocessing \
