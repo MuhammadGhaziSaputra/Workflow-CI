@@ -71,11 +71,7 @@ jobs:
           if [ -n "$TRACKING_URI" ] && ! echo "$TRACKING_URI" | grep -qiE '^(https?://)?(localhost|127\.0\.0\.1)'; then
             echo "Testing remote tracking server connection to $TRACKING_URI ..."
             export TEST_URI="$TRACKING_URI"
-            if python3 -c "
-import os, mlflow
-mlflow.set_tracking_uri(os.environ['TEST_URI'])
-mlflow.search_experiments(max_results=1)
-" > /dev/null 2>&1; then
+            if python3 -c "import os, mlflow; mlflow.set_tracking_uri(os.environ['TEST_URI']); mlflow.search_experiments(max_results=1)" > /dev/null 2>&1; then
               echo "::notice::Remote MLflow tracking server is reachable and authenticated!"
               export MLFLOW_TRACKING_URI="$TRACKING_URI"
               USE_REMOTE=true
