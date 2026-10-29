@@ -55,40 +55,48 @@ jobs:
         run: |
           set -e
           set -o pipefail
-          echo "=== Starting MLflow Project Training ==="
+          echo "=== Starting MLflow Project Retraining Pipeline ==="
 
           # Clean and sanitize tracking URI
           TRACKING_URI=$(echo "${MLFLOW_TRACKING_URI:-}" | tr -d ' ' | tr -d '"' | tr -d "'" | tr -d '\r' | tr -d '\n' | sed 's:/*$::')
 
-          export TRACKING_URI
-          python3 -c "
-          import os, urllib.parse
-          u = os.environ.get('TRACKING_URI', '')
-          p = urllib.parse.urlparse(u)
-          print(f'::notice title=URI Diagnostics::Scheme={p.scheme}, Host={p.hostname}, Port={p.port}, Path={p.path}, Length={len(u)}')
-          "
-
-
           # Auto-correct DagsHub URI if missing .mlflow suffix
           if echo "$TRACKING_URI" | grep -qi 'dagshub\.com' && ! echo "$TRACKING_URI" | grep -qi '\.mlflow$'; then
-            echo "::notice::Auto-correcting DagsHub URI by appending .mlflow: ${TRACKING_URI}.mlflow"
+            echo "::notice::Formatting DagsHub URI with .mlflow: ${TRACKING_URI}.mlflow"
             TRACKING_URI="${TRACKING_URI}.mlflow"
           fi
 
-          if [ -z "$TRACKING_URI" ]; then
-            echo "::notice::No remote MLFLOW_TRACKING_URI provided. Using local filesystem tracking."
-            unset MLFLOW_TRACKING_URI
-            unset MLFLOW_TRACKING_USERNAME
-            unset MLFLOW_TRACKING_PASSWORD
-          elif echo "$TRACKING_URI" | grep -qiE '^(https?://)?(localhost|127\.0\.0\.1)'; then
-            echo "::warning::MLFLOW_TRACKING_URI is set to localhost ($TRACKING_URI). Starting local MLflow server on runner port 5000..."
-            mlflow server --host 127.0.0.1 --port 5000 --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns &
-            sleep 4
-            export MLFLOW_TRACKING_URI="http://127.0.0.1:5000"
-            echo "::notice::Local MLflow server is active at http://127.0.0.1:5000"
-          else
-            echo "::notice::Using Remote MLflow Tracking URI: $TRACKING_URI"
-            export MLFLOW_TRACKING_URI="$TRACKING_URI"
+          # Pre-flight check: Test if remote tracking server is reachable and authorized
+          USE_REMOTE=false
+          if [ -n "$TRACKING_URI" ] && ! echo "$TRACKING_URI" | grep -qiE '^(https?://)?(localhost|127\.0\.0\.1)'; then
+            echo "Testing remote tracking server connection to $TRACKING_URI ..."
+            export TEST_URI="$TRACKING_URI"
+            if python3 -c "
+import os, mlflow
+mlflow.set_tracking_uri(os.environ['TEST_URI'])
+mlflow.search_experiments(max_results=1)
+" > /dev/null 2>&1; then
+              echo "::notice::Remote MLflow tracking server is reachable and authenticated!"
+              export MLFLOW_TRACKING_URI="$TRACKING_URI"
+              USE_REMOTE=true
+            else
+              echo "::warning::Remote tracking server ($TRACKING_URI) returned an error (HTTP 404 or unauthenticated). Falling back to runner local tracking."
+            fi
+          fi
+
+          if [ "$USE_REMOTE" = false ]; then
+            if [ -n "$TRACKING_URI" ] && echo "$TRACKING_URI" | grep -qiE '^(https?://)?(localhost|127\.0\.0\.1)'; then
+              echo "::notice::MLFLOW_TRACKING_URI set to localhost. Starting local MLflow server on runner port 5000..."
+              mlflow server --host 127.0.0.1 --port 5000 --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns &
+              sleep 4
+              export MLFLOW_TRACKING_URI="http://127.0.0.1:5000"
+              echo "::notice::Local MLflow server is active at http://127.0.0.1:5000"
+            else
+              echo "::notice::Using runner filesystem tracking (mlruns)."
+              unset MLFLOW_TRACKING_URI
+              unset MLFLOW_TRACKING_USERNAME
+              unset MLFLOW_TRACKING_PASSWORD
+            fi
           fi
 
           # Copy preprocessing data into MLProject directory
@@ -96,22 +104,13 @@ jobs:
 
           # Run MLflow project for model retraining
           cd MLProject
-          set +e
           mlflow run . \
             -P n_estimators=200 \
             -P max_depth=10 \
             -P min_samples_split=5 \
             -P min_samples_leaf=2 \
             -P data_dir=breast_cancer_preprocessing \
-            --env-manager=local > /tmp/mlflow.log 2>&1
-          RUN_EXIT=$?
-          cat /tmp/mlflow.log
-
-          if [ $RUN_EXIT -ne 0 ]; then
-            ERR_MSG=$(tail -n 15 /tmp/mlflow.log | tr '\n' ' ')
-            echo "::error title=MLflow Run Failed::$ERR_MSG"
-            exit $RUN_EXIT
-          fi
+            --env-manager=local
 
           echo "=== MLflow Project Training Completed Successfully ==="
 
