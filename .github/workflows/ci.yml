@@ -54,10 +54,17 @@ jobs:
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
         run: |
           set -e
+          set -o pipefail
           echo "=== Starting MLflow Project Training ==="
 
           # Clean and sanitize tracking URI
-          TRACKING_URI=$(echo "${MLFLOW_TRACKING_URI:-}" | tr -d ' ' | tr -d '"' | tr -d "'" | tr -d '\r' | tr -d '\n')
+          TRACKING_URI=$(echo "${MLFLOW_TRACKING_URI:-}" | tr -d ' ' | tr -d '"' | tr -d "'" | tr -d '\r' | tr -d '\n' | sed 's:/*$::')
+
+          # Auto-correct DagsHub URI if missing .mlflow suffix
+          if echo "$TRACKING_URI" | grep -qi 'dagshub\.com' && ! echo "$TRACKING_URI" | grep -qi '\.mlflow$'; then
+            echo "::notice::Auto-correcting DagsHub URI by appending .mlflow: ${TRACKING_URI}.mlflow"
+            TRACKING_URI="${TRACKING_URI}.mlflow"
+          fi
 
           if [ -z "$TRACKING_URI" ]; then
             echo "::notice::No remote MLFLOW_TRACKING_URI provided. Using local filesystem tracking."
@@ -107,7 +114,11 @@ jobs:
         run: |
           set -e
           echo "=== MLflow Runs Info ==="
-          TRACKING_URI=$(echo "${MLFLOW_TRACKING_URI:-}" | tr -d ' ' | tr -d '"' | tr -d "'" | tr -d '\r' | tr -d '\n')
+          TRACKING_URI=$(echo "${MLFLOW_TRACKING_URI:-}" | tr -d ' ' | tr -d '"' | tr -d "'" | tr -d '\r' | tr -d '\n' | sed 's:/*$::')
+
+          if echo "$TRACKING_URI" | grep -qi 'dagshub\.com' && ! echo "$TRACKING_URI" | grep -qi '\.mlflow$'; then
+            TRACKING_URI="${TRACKING_URI}.mlflow"
+          fi
 
           if echo "$TRACKING_URI" | grep -qiE '^(https?://)?(localhost|127\.0\.0\.1)'; then
             export MLFLOW_TRACKING_URI="http://127.0.0.1:5000"
