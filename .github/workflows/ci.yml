@@ -60,6 +60,15 @@ jobs:
           # Clean and sanitize tracking URI
           TRACKING_URI=$(echo "${MLFLOW_TRACKING_URI:-}" | tr -d ' ' | tr -d '"' | tr -d "'" | tr -d '\r' | tr -d '\n' | sed 's:/*$::')
 
+          export TRACKING_URI
+          python3 -c "
+          import os, urllib.parse
+          u = os.environ.get('TRACKING_URI', '')
+          p = urllib.parse.urlparse(u)
+          print(f'::notice title=URI Diagnostics::Scheme={p.scheme}, Host={p.hostname}, Port={p.port}, Path={p.path}, Length={len(u)}')
+          "
+
+
           # Auto-correct DagsHub URI if missing .mlflow suffix
           if echo "$TRACKING_URI" | grep -qi 'dagshub\.com' && ! echo "$TRACKING_URI" | grep -qi '\.mlflow$'; then
             echo "::notice::Auto-correcting DagsHub URI by appending .mlflow: ${TRACKING_URI}.mlflow"
