@@ -53,14 +53,28 @@ jobs:
           MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
         run: |
+          set -e
+          set -o pipefail
+
           echo "=== Starting MLflow Project Training ==="
-          if [ -z "$MLFLOW_TRACKING_URI" ]; then
-            echo "::notice::Tracking URI: local"
+
+          # Clean and sanitize tracking URI
+          TRACKING_URI=$(echo "${MLFLOW_TRACKING_URI:-}" | tr -d ' ' | tr -d '"' | tr -d "'" | tr -d '\r' | tr -d '\n')
+
+          if [ -z "$TRACKING_URI" ]; then
+            echo "::notice::No remote MLFLOW_TRACKING_URI provided. Using local filesystem tracking."
             unset MLFLOW_TRACKING_URI
             unset MLFLOW_TRACKING_USERNAME
             unset MLFLOW_TRACKING_PASSWORD
+          elif echo "$TRACKING_URI" | grep -qiE '^(https?://)?(localhost|127\.0\.0\.1)'; then
+            echo "::warning::MLFLOW_TRACKING_URI is set to localhost ($TRACKING_URI). Starting local MLflow server on runner port 5000..."
+            mlflow server --host 127.0.0.1 --port 5000 --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns &
+            sleep 4
+            export MLFLOW_TRACKING_URI="http://127.0.0.1:5000"
+            echo "::notice::Local MLflow server is active at http://127.0.0.1:5000"
           else
-            echo "::notice::Tracking URI: $MLFLOW_TRACKING_URI"
+            echo "::notice::Using Remote MLflow Tracking URI: $TRACKING_URI"
+            export MLFLOW_TRACKING_URI="$TRACKING_URI"
           fi
 
           # Copy preprocessing data into MLProject directory
@@ -68,61 +82,59 @@ jobs:
 
           # Run MLflow project for model retraining
           cd MLProject
-          if ! mlflow run . \
+          mlflow run . \
             -P n_estimators=200 \
             -P max_depth=10 \
             -P min_samples_split=5 \
             -P min_samples_leaf=2 \
             -P data_dir=breast_cancer_preprocessing \
-            --env-manager=local 2>&1 | tee /tmp/output.log; then
-            ERR=$(tail -n 25 /tmp/output.log | tr '\n' ' ')
-            echo "::error title=MLflow Run Error::$ERR"
-            exit 1
-          fi
+            --env-manager=local
 
-          echo "=== MLflow Project Training Completed ==="
+          echo "=== MLflow Project Training Completed Successfully ==="
 
       - name: Get latest MLflow run_id
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
         run: |
-          echo "=== MLflow Runs ==="
-          RUN_DIR=""
-          if [ -d "mlruns" ]; then
-            RUN_DIR="mlruns"
-          elif [ -d "MLProject/mlruns" ]; then
-            RUN_DIR="MLProject/mlruns"
+          set -e
+          echo "=== MLflow Runs Info ==="
+          TRACKING_URI=$(echo "${MLFLOW_TRACKING_URI:-}" | tr -d ' ' | tr -d '"' | tr -d "'" | tr -d '\r' | tr -d '\n')
+
+          if echo "$TRACKING_URI" | grep -qiE '^(https?://)?(localhost|127\.0\.0\.1)'; then
+            export MLFLOW_TRACKING_URI="http://127.0.0.1:5000"
+          elif [ -n "$TRACKING_URI" ]; then
+            export MLFLOW_TRACKING_URI="$TRACKING_URI"
           fi
 
-          if [ -n "$RUN_DIR" ]; then
-            echo "MLflow runs directory found at: $RUN_DIR"
-            ls -la "$RUN_DIR"
-            echo ""
-            LATEST_RUN=$(find "$RUN_DIR" -maxdepth 3 -mindepth 3 -type d 2>/dev/null | sort | tail -1)
-            if [ -n "$LATEST_RUN" ]; then
-              echo "Latest run directory: $LATEST_RUN"
-              RUN_ID=$(basename "$LATEST_RUN")
-              echo "Latest MLflow Run ID: $RUN_ID"
-              if [ -f "$LATEST_RUN/meta.yaml" ]; then
-                echo "--- meta.yaml ---"
-                cat "$LATEST_RUN/meta.yaml"
-              fi
-            fi
-          else
-            echo "No local mlruns directory (using remote tracking via DagsHub)"
-            echo "Check results at: ${{ secrets.MLFLOW_TRACKING_URI }}"
-          fi
-
-          # Output latest run ID using Python MLflow API
           python -c "
           import os, mlflow
-          for p in [os.environ.get('MLFLOW_TRACKING_URI'), 'MLProject/mlruns', 'mlruns']:
-              if p and (os.path.isdir(p) or p.startswith('http')):
-                  try:
-                      mlflow.set_tracking_uri(p if p.startswith('http') else 'file://' + os.path.abspath(p))
-                      runs = mlflow.search_runs(search_all_experiments=True, order_by=['start_time DESC'], max_results=1)
-                      if not runs.empty:
-                          print('=== MLflow Latest Run ID via API ===')
-                          print(runs.iloc[0]['run_id'])
-                          break
-                  except Exception:
-                      pass
-          " || true
+          uri = os.environ.get('MLFLOW_TRACKING_URI')
+          candidates = [uri, 'http://127.0.0.1:5000', 'MLProject/mlruns', 'mlruns'] if uri else ['http://127.0.0.1:5000', 'MLProject/mlruns', 'mlruns']
+          found = False
+          for p in candidates:
+              if not p:
+                  continue
+              try:
+                  mlflow.set_tracking_uri(p if p.startswith('http') else 'file://' + os.path.abspath(p))
+                  runs = mlflow.search_runs(search_all_experiments=True, order_by=['start_time DESC'], max_results=1)
+                  if not runs.empty:
+                      latest = runs.iloc[0]
+                      print('=== MLflow Latest Run ID via API ===')
+                      print(f'Run ID: {latest[\"run_id\"]}')
+                      print(f'Status: {latest.get(\"status\", \"FINISHED\")}')
+                      print('Metrics:')
+                      for col in runs.columns:
+                          if col.startswith('metrics.'):
+                              print(f'  {col.replace(\"metrics.\", \"\")}: {latest[col]:.4f}')
+                      found = True
+                      break
+              except Exception:
+                  pass
+          if not found:
+              print('Check results directory on filesystem:')
+              for d in ['mlruns', 'MLProject/mlruns']:
+                  if os.path.exists(d):
+                      print(f'Directory {d} exists.')
+          "
