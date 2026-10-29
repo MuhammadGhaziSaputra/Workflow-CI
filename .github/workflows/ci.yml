@@ -54,8 +54,6 @@ jobs:
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
         run: |
           set -e
-          set -o pipefail
-
           echo "=== Starting MLflow Project Training ==="
 
           # Clean and sanitize tracking URI
@@ -82,13 +80,22 @@ jobs:
 
           # Run MLflow project for model retraining
           cd MLProject
+          set +e
           mlflow run . \
             -P n_estimators=200 \
             -P max_depth=10 \
             -P min_samples_split=5 \
             -P min_samples_leaf=2 \
             -P data_dir=breast_cancer_preprocessing \
-            --env-manager=local
+            --env-manager=local > /tmp/mlflow.log 2>&1
+          RUN_EXIT=$?
+          cat /tmp/mlflow.log
+
+          if [ $RUN_EXIT -ne 0 ]; then
+            ERR_MSG=$(tail -n 15 /tmp/mlflow.log | tr '\n' ' ')
+            echo "::error title=MLflow Run Failed::$ERR_MSG"
+            exit $RUN_EXIT
+          fi
 
           echo "=== MLflow Project Training Completed Successfully ==="
 
